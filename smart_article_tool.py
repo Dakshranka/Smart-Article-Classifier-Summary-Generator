@@ -14,7 +14,13 @@ classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnl
 summarizer = pipeline("summarization", model="google/pegasus-xsum")
 
 # Load spaCy model for NLP tasks
-nlp = spacy.load('en_core_web_sm')
+try:
+    nlp = spacy.load("en_core_web_sm")
+except OSError:
+    from spacy.cli import download
+    download("en_core_web_sm")
+    nlp = spacy.load("en_core_web_sm")
+
 
 # Function to sanitize the filename
 def sanitize_filename(filename):
