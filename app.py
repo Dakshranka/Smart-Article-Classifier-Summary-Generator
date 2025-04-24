@@ -162,7 +162,7 @@ def main():
                     progress_bar = st.progress(0)
                     progress_bar.progress(10)  # Start processing
                     with st.spinner("Fetching and processing article..."):
-                        article_file_path, summary_file_path, extracted_text, summary, error = analyze_and_save_article(article_url, is_url=True)
+                        article_file_path, summary_file_path, extracted_text, summary, top_label, score, error = analyze_and_save_article(article_url, is_url=True)
                     
                     progress_bar.progress(50)  # Scraping complete
                     if error:
@@ -184,6 +184,9 @@ def main():
                         st.markdown("<div class='section-header'>Results</div>", unsafe_allow_html=True)
                         with st.container():
                             st.markdown("<div class='section-container'>", unsafe_allow_html=True)
+                            st.subheader("Classification")
+                            st.write(f"Category: {top_label} ({score}%)")
+                            
                             st.subheader("Extracted Text Preview")
                             st.text_area("Extracted Text", extracted_text[:1000] + "..." if len(extracted_text) > 1000 else extracted_text, height=200, help="Preview of the scraped or uploaded article text.")
                             
@@ -224,7 +227,7 @@ def main():
                         progress_bar = st.progress(0)
                         progress_bar.progress(10)
                         with st.spinner("Processing uploaded article..."):
-                            article_file_path, summary_file_path, extracted_text, summary, error = analyze_and_save_article(file_content, is_url=False)
+                            article_file_path, summary_file_path, extracted_text, summary, top_label, score, error = analyze_and_save_article(file_content, is_url=False)
                         
                         progress_bar.progress(100)
                         if error:
@@ -241,6 +244,9 @@ def main():
                             st.markdown("<div class='section-header'>Results</div>", unsafe_allow_html=True)
                             with st.container():
                                 st.markdown("<div class='section-container'>", unsafe_allow_html=True)
+                                st.subheader("Classification")
+                                st.write(f"Category: {top_label} ({score}%)")
+                                
                                 st.subheader("Generated Summary")
                                 st.write(summary)
                                 
@@ -274,7 +280,7 @@ def main():
                         progress_bar = st.progress(0)
                         progress_bar.progress(10)
                         with st.spinner("Processing uploaded article..."):
-                            article_file_path, summary_file_path, extracted_text, summary, error = analyze_and_save_article(full_text, is_url=False)
+                            article_file_path, summary_file_path, extracted_text, summary, top_label, score, error = analyze_and_save_article(full_text, is_url=False)
                         
                         progress_bar.progress(100)
                         if error:
@@ -291,6 +297,9 @@ def main():
                             st.markdown("<div class='section-header'>Results</div>", unsafe_allow_html=True)
                             with st.container():
                                 st.markdown("<div class='section-container'>", unsafe_allow_html=True)
+                                st.subheader("Classification")
+                                st.write(f"Category: {top_label} ({score}%)")
+                                
                                 st.subheader("Generated Summary")
                                 st.write(summary)
                                 

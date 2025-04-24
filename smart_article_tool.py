@@ -2,18 +2,24 @@ import os
 import requests
 from datetime import datetime
 from bs4 import BeautifulSoup
-from transformers import pipeline
 from fpdf import FPDF
 import re
 import spacy
 from heapq import nlargest
 import unicodedata
 
-# Initialize the classifier and summarizer
-classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
-summarizer = pipeline("summarization", model="google/pegasus-xsum")
+# Initialize pipelines lazily
+classifier = None
+summarizer = None
 
-# Load spaCy model for NLP tasks
+def initialize_models():
+    global classifier, summarizer
+    if classifier is None or summarizer is None:
+        from transformers import pipeline
+        classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
+        summarizer = pipeline("summarization", model="google/pegasus-xsum")
+
+# Load spaCy model
 nlp = spacy.load('en_core_web_sm')
 
 # Function to sanitize the filename
@@ -23,9 +29,7 @@ def sanitize_filename(filename):
 # Function to clean text for PDF compatibility
 def clean_text_for_pdf(text):
     """Aggressively clean text to remove all non-ASCII characters and boilerplate"""
-    # Normalize Unicode to ASCII, removing non-ASCII characters
     text = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('ascii')
-    # Remove boilerplate, expanded for journal terms and news snippets
     text = re.sub(
         r'(Advertisement|Sponsored|Subscribe Now|Sign Up|Log In|Follow Us|Share This|Related Posts|'
         r'Footer|Nav|Menu|Sidebar|Comment|Social Media|Home|About|Contact|Privacy Policy|'
@@ -34,12 +38,11 @@ def clean_text_for_pdf(text):
         r'Newsletter|Membership|Cookies|Accept|Decline|View Full Text).*?(?=\n|$)', 
         '', text, flags=re.IGNORECASE
     )
-    # Normalize whitespace
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
 # Function to save text as PDF with improved formatting
-def save_text_as_pdf(filename, title, text, folder):
+def save_text_as_pdf(filename, title, text, folder, is_summary=False):
     if not os.path.exists(folder):
         os.makedirs(folder)
     filename = sanitize_filename(filename)
@@ -53,7 +56,8 @@ def save_text_as_pdf(filename, title, text, folder):
     
     # Header
     pdf.set_font("Arial", 'B', 16)
-    pdf.cell(200, 10, txt="Article Summary", ln=True, align='C')
+    header_text = "Article Summary" if is_summary else "Article"
+    pdf.cell(200, 10, txt=header_text, ln=True, align='C')
     pdf.ln(5)
     pdf.set_font("Arial", size=10)
     pdf.cell(200, 10, txt=f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=True, align='L')
@@ -62,7 +66,6 @@ def save_text_as_pdf(filename, title, text, folder):
     # Title
     pdf.set_font("Arial", 'B', 14)
     cleaned_title = clean_text_for_pdf(title)
-    # Fix common title errors (e.g., bioethic -> bioethics)
     cleaned_title = re.sub(r'\bbioethic\b', 'bioethics', cleaned_title, flags=re.IGNORECASE)
     pdf.multi_cell(0, 10, txt=cleaned_title)
     pdf.ln(5)
@@ -78,7 +81,6 @@ def save_text_as_pdf(filename, title, text, folder):
 
 # Function to rank sentences for summary
 def rank_sentences(text, n=5):
-    """Rank sentences by importance using spaCy"""
     doc = nlp(text)
     sentences = [sent.text.strip() for sent in doc.sents]
     sentence_scores = {}
@@ -90,7 +92,6 @@ def rank_sentences(text, n=5):
 
 # Function to filter irrelevant summary sentences
 def filter_relevant_sentences(sentences, keywords):
-    """Filter sentences that are relevant to the article based on keywords"""
     relevant_sentences = []
     for sent in sentences:
         doc = nlp(sent.lower())
@@ -115,21 +116,18 @@ def analyze_and_save_article(content, is_url=True):
             except requests.exceptions.HTTPError as http_err:
                 if response.status_code == 403:
                     print(f"❌ Access denied (403 Forbidden) for URL: {content}")
-                    return None, None, None, None, "403 Forbidden: Access denied. This site (e.g., ResearchGate) may require login. Please upload the article as a .txt or .pdf file."
+                    return None, None, None, None, None, None, "403 Forbidden: Access denied. This site (e.g., ResearchGate) may require login. Please upload the article as a .txt or .pdf file."
                 raise
             response.encoding = 'utf-8'
             soup = BeautifulSoup(response.text, 'html.parser')
             title = soup.title.string.strip() if soup.title else "Untitled"
-            # Fix common title errors
             title = re.sub(r'\bbioethic\b', 'bioethics', title, flags=re.IGNORECASE)
             
-            # Check for login/paywall prompts
             login_indicators = ['login', 'sign in', 'register', 'access restricted', 'log in to view']
             if any(indicator in soup.text.lower() for indicator in login_indicators):
                 print("⚠️ Login or paywall detected.")
-                return None, None, None, None, "Login or paywall detected. Please upload the article content as a .txt or .pdf file."
+                return None, None, None, None, None, None, "Login or paywall detected. Please upload the article content as a .txt or .pdf file."
             
-            # Try multiple selectors for article content
             article_content = (
                 soup.find('article') or
                 soup.find('div', class_=re.compile('article|content|post|body|entry|story|text|single|page|main-content|post-content|entry-content|article-text|article-body|publication-abstract|nova-e-text', re.I)) or
@@ -140,13 +138,11 @@ def analyze_and_save_article(content, is_url=True):
             )
             
             if not article_content:
-                # Fallback 1: Extract all paragraph tags
                 print("⚠️ Primary selectors failed. Attempting fallback to paragraph tags.")
                 paragraphs = soup.find_all('p')
                 text = ' '.join(p.get_text().strip() for p in paragraphs if p.get_text().strip())
                 
                 if not text or len(text) < 100:
-                    # Fallback 2: Extract from body, excluding scripts and nav
                     print("⚠️ Paragraph fallback failed. Attempting body extraction.")
                     for unwanted in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']):
                         unwanted.decompose()
@@ -155,71 +151,67 @@ def analyze_and_save_article(content, is_url=True):
                 
                 if not text or len(text) < 100:
                     print(f"⚠️ All extraction methods failed. Extracted text: {text}")
-                    return None, None, None, None, "Unable to extract article content. The website (e.g., ResearchGate) may use JavaScript rendering or a unique structure. Try uploading the article as a .txt or .pdf file."
+                    return None, None, None, None, None, None, "Unable to extract article content. The website (e.g., ResearchGate) may use JavaScript rendering or a unique structure. Try uploading the article as a .txt or .pdf file."
             else:
                 text = article_content.get_text(separator=' ', strip=True)
-                print(f"📄 Extracted text: {text[:1000]}...")
+                print(f"📄 Extracted text: {text}")
             
         else:
             text = content
             title = "Uploaded_Article"
             title = re.sub(r'\bbioethic\b', 'bioethics', title, flags=re.IGNORECASE)
 
-        # Clean text for PDF and summarization
         text = clean_text_for_pdf(text)
         if not text or len(text) < 100:
             print(f"⚠️ Article content is empty or too short: {text}")
-            return None, None, None, None, "Article content is empty or too short."
+            return None, None, None, None, None, None, "Article content is empty or too short."
 
-        # Save original article as PDF
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         article_filename = f"article_{timestamp}.pdf" if is_url else "uploaded_article.pdf"
-        article_file_path = save_text_as_pdf(article_filename, title, text, "articles")
+        article_file_path = save_text_as_pdf(article_filename, title, text, "articles", is_summary=False)
 
-        # Classify the article
+        initialize_models()
+
         print("🧠 Classifying article...")
         labels = ["Design", "Technology", "Business", "Marketing", "AI"]
         classification = classifier(text, candidate_labels=labels)
         top_label = classification['labels'][0]
         score = round(classification['scores'][0] * 100, 2)
-        # Standardize AI label
         display_label = "AI" if top_label.lower() == 'ai' else top_label.capitalize()
 
-        # Summarize the article
         print("📝 Generating summary...")
-        chunks = [text[i:i+800] for i in range(0, len(text), 600)]  # Overlap for context
+        chunks = [text[i:i+800] for i in range(0, len(text), 600)]
         summary_parts = []
         
         for chunk in chunks:
             try:
-                result = summarizer(chunk, max_length=400, min_length=30, do_sample=False)
+                input_length = len(text.split())  # or use tokenizer.encode() for more precision
+                dynamic_max_length = max(50, int(0.5 * input_length))
+                result = summarizer(chunk, max_length=dynamic_max_length, min_length=30, do_sample=False)
                 summary_parts.append(result[0]['summary_text'])
             except Exception as e:
                 print(f"⚠️ Error summarizing chunk: {e}")
                 continue
         
-        # Combine and rank sentences
         summary_text = " ".join(summary_parts)
         summary_sentences = rank_sentences(summary_text, n=5)
-        # Filter relevant sentences using article-related keywords
         keywords = ['artificial intelligence', 'bioethics', 'society', 'medical', 'ethics', 'technology']
         summary_sentences = filter_relevant_sentences(summary_sentences, keywords)
         summary = " ".join(summary_sentences[:min(5, len(summary_sentences))])
 
-        # Save summary as PDF
         summary_filename = f"summary_{timestamp}.pdf" if is_url else "uploaded_article_summary.pdf"
         summary_content = (
             f"Title: {title}\n\n"
             f"Category: {display_label} ({score} percent)\n\n"
             f"Summary:\n{summary}"
         )
-        summary_file_path = save_text_as_pdf(summary_filename, title, summary_content, "summaries")
+        summary_file_path = save_text_as_pdf(summary_filename, title, summary_content, "summaries", is_summary=True)
 
         print(f"\n✅ Saved original in 'articles/{article_filename}'")
         print(f"✅ Saved summary in 'summaries/{summary_filename}'\n")
         
-        return article_file_path, summary_file_path, text, summary, None
+        return article_file_path, summary_file_path, text, summary, display_label, score, None
 
     except Exception as e:
         print(f"❌ Error: {e}")
-        return None, None, None, None, str(e)
+        return None, None, None, None, None, None, str(e)
