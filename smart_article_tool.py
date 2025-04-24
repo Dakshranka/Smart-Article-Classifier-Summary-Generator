@@ -19,7 +19,7 @@ def initialize_models():
         classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
         summarizer = pipeline("summarization", model="google/pegasus-xsum")
 
-# Load spaCy model
+# Load spaCy model for NLP tasks
 nlp = spacy.load('en_core_web_sm')
 
 # Function to sanitize the filename
@@ -214,4 +214,4 @@ def analyze_and_save_article(content, is_url=True):
 
     except Exception as e:
         print(f"❌ Error: {e}")
-        return None, None, None, None, None, None, str(e)
+        return None, None, None, None, str(e)
