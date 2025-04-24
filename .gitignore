@@ -1,2 +1,4 @@
-.articles
-.summaries
+__pycache__/
+*.pyc
+articles/
+summaries/
